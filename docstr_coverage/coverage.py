@@ -3,9 +3,9 @@
 # TODO: If Python 2, ```from __future__ import print_function```
 from ast import NodeVisitor, parse, get_docstring
 import os
-from pprint import pprint as pp
 import re
 import sys
+from pathlib import Path
 
 
 class DocStringCoverageVisitor(NodeVisitor):
@@ -140,12 +140,12 @@ def get_docstring_coverage(
         node: Tuple triple of (String, Boolean, List)
             Information describing a node. `node[0]` is the node's name. `node[1]` is True if the node was properly documented,
             else False. `node[3]` is a list containing the node's children as triples of the same form (if it had any)
+        filename: String
+            String containing a name of file.
         ignore_names: tuple of lists ([String, String, [String...]]) where the first element is the regular expression
             for matching filenames. All remaining arguments are regexes for matching names of functions/classes
             to be excluded from checking for documentation. It will be excluded if and only if the first and at least
             one of the remaining regexes hits a match.
-        filename: String
-            String containing a name of file.
 
         Returns
         -------
@@ -172,7 +172,8 @@ def get_docstring_coverage(
             elif skip_class_def and "_" not in name and (name[0] == name[0].upper()):
                 docs_needed -= 1
             elif ignore_names:
-                filename = os.path.basename(filename).split(".")[0] if "." in filename else filename
+                filename = os.path.basename(filename).split(".")[0]
+                already_ignored = []
                 for line in ignore_names:
                     file_regex = line[0]
                     name_regex_list = list(line[1:])
@@ -183,7 +184,11 @@ def get_docstring_coverage(
                     for name_regex in name_regex_list:
                         name_match = re.fullmatch(name_regex, name)
                         name_match = name_match.group() if name_match else None
+                        ignore_tuple = (filename, name_match)
+                        if ignore_tuple in already_ignored:
+                            continue
                         if name_match:
+                            already_ignored.append(ignore_tuple)
                             docs_needed -= 1
                             break
             else:
@@ -375,14 +380,13 @@ def _execute():
         default=False,
         help="Follow symlinks",
     )
-
     parser.add_option(
         "-d",
         "--docstr-ignore-file",
         dest="ignore_names_file",
-        default=None,
+        default=".docstr_coverage",
         type="string",
-        help="A path to filename where list of regexes (file name) occurs."
+        help="Filepath containing list of regex (file-pattern, name-pattern) pairs"
     )
     # TODO: Separate above arg/option parsing into separate function - Document return values to describe allowed options
     options, args = parser.parse_args()
@@ -395,10 +399,13 @@ def _execute():
     exclude_re = re.compile(r"{}".format(options.exclude)) if options.exclude else None
     filenames = []
 
-    if args[0].endswith(".py"):
-        filenames = [args[0]]
+    path = args[0]
+
+    if path.endswith(".py"):
+        filenames = [path]
+        path = "."
     else:
-        for root, dirs, f_names in os.walk(args[0], followlinks=options.follow_links):
+        for root, dirs, f_names in os.walk(path, followlinks=options.follow_links):
             if exclude_re is not None:
                 dirs[:] = [_ for _ in dirs if not exclude_re.match(_)]
 
@@ -413,7 +420,11 @@ def _execute():
         sys.exit("No Python files found")
 
     ignore_names = ()
-    if options.ignore_names_file is not None:
+
+    if options.ignore_names_file == ".docstr_coverage":
+        options.ignore_names_file = Path(path, options.ignore_names_file)
+
+    if os.path.isfile(options.ignore_names_file):
         ignore_names = tuple([line.split() for line in open(options.ignore_names_file).readlines() if ' ' in line])
 
     get_docstring_coverage(
